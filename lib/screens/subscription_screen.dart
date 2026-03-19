@@ -19,7 +19,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     setState(() => _isLoading = true);
     
     final subscriptionService = Provider.of<SubscriptionService>(context, listen: false);
-    final offeringId = _isAnnual ? 'annual' : 'monthly';
+    final offeringId = _isAnnual ? '\$rc_annual' : '\$rc_monthly';
     
     final success = await subscriptionService.purchaseSubscription(offeringId);
     

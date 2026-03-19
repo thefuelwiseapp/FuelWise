@@ -12,7 +12,7 @@ class SubscriptionService extends ChangeNotifier {
 
   // RevenueCat API keys - Replace with your actual keys
   // Get these from https://app.revenuecat.com
-  static const String _androidApiKey = 'test_ngnsIWrKWVzncHExpNrAfRaarkB';
+  static const String _androidApiKey = 'goog_DePqFOmDpnsiPcoGhQFMyVFykYY';
   static const String _iosApiKey = 'YOUR_REVENUECAT_IOS_API_KEY';
   
   // Entitlement identifier

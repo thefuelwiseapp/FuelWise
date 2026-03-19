@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -405,8 +406,6 @@ class _HomeScreenState extends State<HomeScreen> {
           hue = BitmapDescriptor.hueRed;
         }
 
-        final int rank = i;
-        final StationResult stationResult = r;
         newMarkers.add(Marker(
           markerId: MarkerId('station_$i'),
           position: LatLng(r.station.latitude, r.station.longitude),
@@ -415,7 +414,6 @@ class _HomeScreenState extends State<HomeScreen> {
             title: r.station.name,
             snippet: '\$${r.station.price.toStringAsFixed(2)}/L · ${r.distance.toStringAsFixed(1)}km',
           ),
-          onTap: () => _showStationDetails(context, stationResult, rank),
         ));
       }
 
@@ -658,6 +656,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _navigateToStation(StationResult result) async {
+    // Save fill-up record to savings tracker
+    await _saveFillUpRecord(result);
+
     final lat = result.station.latitude;
     final lng = result.station.longitude;
     final googleMapsUrl = Uri.parse('google.navigation:q=$lat,$lng');
@@ -671,6 +672,32 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } catch (e) {
       _showError('Could not open navigation');
+    }
+  }
+
+  Future<void> _saveFillUpRecord(StationResult result) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final existingJson = prefs.getStringList('fillUpHistory') ?? [];
+
+      // Calculate savings vs nearest station
+      final savings = _nearestStation != null
+          ? _nearestStation!.totalCost - result.totalCost
+          : 0.0;
+
+      final record = {
+        'date': DateTime.now().toIso8601String(),
+        'stationName': result.station.name,
+        'savings': savings < 0 ? 0.0 : savings,
+        'totalCost': result.totalCost,
+      };
+
+      existingJson.add(jsonEncode(record));
+      await prefs.setStringList('fillUpHistory', existingJson);
+
+      debugPrint('💾 Saved fill-up record: ${result.station.name}');
+    } catch (e) {
+      debugPrint('⚠️ Could not save fill-up record: $e');
     }
   }
 
