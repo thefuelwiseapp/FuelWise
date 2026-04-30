@@ -148,7 +148,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: 'Tank Size',
             value: _tankSize,
             min: 20,
-            max: 150,
+            max: 300,
             unit: 'L',
             onChanged: (v) => setState(() => _tankSize = v),
           ),
@@ -201,51 +201,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: const Text('Privacy Policy'),
             trailing: const Icon(Icons.open_in_new, size: 16, color: Colors.grey),
             onTap: () => _launchUrl(
-              'https://app.termly.io/dashboard/website/4a2a4676-fc53-4807-af71-13e4b89d6834/privacy-policy',
+              'https://thefuelwiseapp.github.io/FuelWise/privacy-policy.html',
             ),
           ),
           ListTile(
-            leading: const Icon(Icons.data_object),
-            title: const Text('Data Sources'),
-            subtitle: const Text('NSW FuelCheck & QLD Fuel Prices'),
-            trailing: const Icon(Icons.open_in_new, size: 16, color: Colors.grey),
-            onTap: () => showDialog(
-              context: context,
-              builder: (context) => AlertDialog(
-                title: const Text('Data Sources'),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Fuel price data is sourced from official government APIs:',
-                    ),
-                    const SizedBox(height: 12),
-                    GestureDetector(
-                      onTap: () => _launchUrl('https://www.fuelcheck.nsw.gov.au'),
-                      child: const Text(
-                        'NSW FuelCheck\nhttps://www.fuelcheck.nsw.gov.au',
-                        style: TextStyle(color: Colors.blue),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    GestureDetector(
-                      onTap: () => _launchUrl('https://www.fuelpricesqld.com.au'),
-                      child: const Text(
-                        'QLD Fuel Prices\nhttps://www.fuelpricesqld.com.au',
-                        style: TextStyle(color: Colors.blue),
-                      ),
-                    ),
-                  ],
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Close'),
-                  ),
-                ],
-              ),
+            leading: const Icon(Icons.info_outline, color: Colors.orange),
+            title: const Text('Disclaimer'),
+            subtitle: const Text(
+              'FuelWise is an independent app and is not affiliated with, '
+              'endorsed by, or representing any government entity. '
+              'Fuel price data is sourced from official government APIs.',
             ),
+            isThreeLine: true,
           ),
           ListTile(
             leading: const Icon(Icons.mail_outline),

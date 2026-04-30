@@ -164,7 +164,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
-                  initialValue: _primaryFuelType,
+                  value: _primaryFuelType,
                   decoration: InputDecoration(
                     hintText: 'Select your fuel type',
                     border: OutlineInputBorder(
@@ -207,7 +207,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
-                  initialValue: _secondaryFuelType,
+                  value: _secondaryFuelType,
                   decoration: InputDecoration(
                     hintText: 'Select fallback fuel type',
                     border: OutlineInputBorder(
@@ -279,7 +279,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               IconButton(
                                 onPressed: () {
                                   setState(() {
-                                    _tankSize += 5;
+                                    if (_tankSize < 300) _tankSize += 5;
                                   });
                                 },
                                 icon: const Icon(Icons.add_circle_outline),
@@ -291,8 +291,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       Slider(
                         value: _tankSize,
                         min: 20,
-                        max: 120,
-                        divisions: 20,
+                        max: 300,
+                        divisions: 56,
                         onChanged: (value) {
                           setState(() {
                             _tankSize = value;

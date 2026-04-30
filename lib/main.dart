@@ -12,6 +12,7 @@ import 'fuel_service.dart';
 import 'models.dart';
 import 'onboarding_screen.dart';
 import 'savings_tracker_screen.dart';
+import 'welcome_screen.dart';
 
 // Monetization & Screens
 import 'services/ad_service.dart';
@@ -58,6 +59,7 @@ class FuelWiseApp extends StatelessWidget {
         routes: {
           '/home': (context) => const HomeScreen(),
           '/onboarding': (context) => const OnboardingScreen(),
+          '/welcome': (context) => const WelcomeScreen(),
           '/settings': (context) => const SettingsScreen(),
           '/subscription': (context) => const SubscriptionScreen(),
           '/price_trends': (context) => const PriceTrendsScreen(),
@@ -89,6 +91,9 @@ class _SplashScreenState extends State<SplashScreen> {
     try {
       await SubscriptionService().initialize();
       await AdService().initialize();
+
+      // Show app open ad on cold launch (free users only)
+      await AdService().showAppOpenAd();
     } catch (e) {
       debugPrint('Service initialization error: $e');
     }
@@ -99,10 +104,13 @@ class _SplashScreenState extends State<SplashScreen> {
 
     final prefs = await SharedPreferences.getInstance();
     final onboardingComplete = prefs.getBool('onboardingComplete') ?? false;
+    final welcomeShown = prefs.getBool('welcomeShown') ?? false;
     
     if (mounted) {
       if (onboardingComplete) {
         Navigator.of(context).pushReplacementNamed('/home');
+      } else if (!welcomeShown) {
+        Navigator.of(context).pushReplacementNamed('/welcome');
       } else {
         Navigator.of(context).pushReplacementNamed('/onboarding');
       }
@@ -173,7 +181,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final FuelService _fuelService = FuelService();
   GoogleMapController? _mapController;
   
@@ -194,11 +202,39 @@ class _HomeScreenState extends State<HomeScreen> {
   
   Set<Marker> _markers = {};
 
+  // ── Search from map point ──
+  LatLng? _customSearchOrigin;       // null = use current location
+  bool _hasCustomOrigin = false;
+
+  // ── Filter results by station name ──
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+
+  // ── Travel time radius selection ──
+  // Options: 5, 10, 15, 20 minutes or fixed 25km (stored as -1)
+  int _selectedTravelMinutes = -1; // -1 means use 25km default
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadSettings();
     _getCurrentLocation();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      final adService = Provider.of<AdService>(context, listen: false);
+      adService.showAppOpenAd();
+    }
   }
 
   // Reload settings when returning from Settings screen
@@ -297,8 +333,24 @@ class _HomeScreenState extends State<HomeScreen> {
       if (_currentPosition == null) return;
     }
 
-    final fuelLevel = await _showFuelLevelDialog();
-    if (fuelLevel == null) return;
+    final result = await _showFuelLevelDialog();
+    if (result == null) return;
+    final fuelLevel = result['fuelLevel'] as double;
+    final travelMinutes = result['travelMinutes'] as int;
+
+    // Determine search origin — custom pin or current location
+    final searchLat = _hasCustomOrigin
+        ? _customSearchOrigin!.latitude
+        : _currentPosition!.latitude;
+    final searchLng = _hasCustomOrigin
+        ? _customSearchOrigin!.longitude
+        : _currentPosition!.longitude;
+
+    // Convert travel time to approximate radius (avg 50km/h urban speed)
+    // -1 = default 25km fixed radius
+    final int radiusKm = travelMinutes == -1
+        ? 25
+        : ((travelMinutes / 60) * 50).round().clamp(3, 50);
 
     if (mounted) {
       setState(() {
@@ -307,30 +359,32 @@ class _HomeScreenState extends State<HomeScreen> {
         _nearestStation = null;
         _savingsVsNearest = 0.0;
         _markers = {};
+        _searchQuery = '';
+        _searchController.clear();
       });
     }
 
     try {
       final stations = await _fuelService.getNearbyPrices(
         fuelType: _primaryFuelType,
-        latitude: _currentPosition!.latitude,
-        longitude: _currentPosition!.longitude,
-        radius: 25,
+        latitude: searchLat,
+        longitude: searchLng,
+        radius: radiusKm,
       );
 
       if (stations.isEmpty && _secondaryFuelType.isNotEmpty) {
         final secondaryStations = await _fuelService.getNearbyPrices(
           fuelType: _secondaryFuelType,
-          latitude: _currentPosition!.latitude,
-          longitude: _currentPosition!.longitude,
-          radius: 25,
+          latitude: searchLat,
+          longitude: searchLng,
+          radius: radiusKm,
         );
         stations.addAll(secondaryStations);
       }
 
       if (stations.isEmpty) {
         if (mounted) setState(() => _isLoading = false);
-        _showError('No stations found within 25km.');
+        _showError('No stations found within ${radiusKm}km.');
         return;
       }
 
@@ -341,8 +395,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
       for (var station in stations) {
         final distanceKm = _calculateDistance(
-          _currentPosition!.latitude,
-          _currentPosition!.longitude,
+          searchLat,
+          searchLng,
           station.latitude,
           station.longitude,
         );
@@ -361,12 +415,11 @@ class _HomeScreenState extends State<HomeScreen> {
         ));
       }
 
-      // Keep all within 20km, sorted by total cost
-      results = results.where((r) => r.distance <= 20).toList();
+      results = results.where((r) => r.distance <= radiusKm).toList();
 
       if (results.isEmpty) {
         if (mounted) setState(() => _isLoading = false);
-        _showError('No stations found within 20km.');
+        _showError('No stations found within ${radiusKm}km.');
         return;
       }
 
@@ -381,12 +434,13 @@ class _HomeScreenState extends State<HomeScreen> {
       // Build map markers
       final newMarkers = <Marker>{};
 
-      // User location marker (blue)
+      // Search origin marker (blue)
       newMarkers.add(Marker(
-        markerId: const MarkerId('user_location'),
-        position: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+        markerId: const MarkerId('search_origin'),
+        position: LatLng(searchLat, searchLng),
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
-        infoWindow: const InfoWindow(title: 'Your Location'),
+        infoWindow: InfoWindow(
+            title: _hasCustomOrigin ? 'Search Origin' : 'Your Location'),
       ));
 
       // Station markers
@@ -396,7 +450,6 @@ class _HomeScreenState extends State<HomeScreen> {
             r.station.address == nearest.station.address;
         final isCheapest = i < 3;
 
-        // Orange = nearest (if not also cheapest), Green = top 3 cheapest, Red = others
         double hue;
         if (isNearest && !isCheapest) {
           hue = BitmapDescriptor.hueOrange;
@@ -406,14 +459,19 @@ class _HomeScreenState extends State<HomeScreen> {
           hue = BitmapDescriptor.hueRed;
         }
 
+        final int capturedIndex = i;
+        final StationResult capturedResult = r;
         newMarkers.add(Marker(
           markerId: MarkerId('station_$i'),
           position: LatLng(r.station.latitude, r.station.longitude),
           icon: BitmapDescriptor.defaultMarkerWithHue(hue),
           infoWindow: InfoWindow(
             title: r.station.name,
-            snippet: '\$${r.station.price.toStringAsFixed(2)}/L · ${r.distance.toStringAsFixed(1)}km',
+            snippet:
+                '\$${r.station.price.toStringAsFixed(2)}/L · ${r.distance.toStringAsFixed(1)}km',
           ),
+          onTap: () =>
+              _showStationDetails(context, capturedResult, capturedIndex),
         ));
       }
 
@@ -424,14 +482,13 @@ class _HomeScreenState extends State<HomeScreen> {
           _savingsVsNearest = savings < 0 ? 0 : savings;
           _markers = newMarkers;
           _isLoading = false;
-          _showMapView = false; // Default to list view
+          _showMapView = false;
         });
 
-        // Zoom map to show results
         if (_mapController != null) {
           _mapController!.animateCamera(
             CameraUpdate.newLatLngZoom(
-              LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+              LatLng(searchLat, searchLng),
               13,
             ),
           );
@@ -443,10 +500,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<double?> _showFuelLevelDialog() async {
+  Future<Map<String, dynamic>?> _showFuelLevelDialog() async {
     double fuelLevel = 25.0;
+    int travelMinutes = _selectedTravelMinutes;
 
-    return showDialog<double>(
+    return showDialog<Map<String, dynamic>>(
       context: context,
       builder: (context) {
         return StatefulBuilder(
@@ -465,7 +523,32 @@ class _HomeScreenState extends State<HomeScreen> {
                     label,
                     style: TextStyle(
                       color: isSelected ? Colors.white : Colors.black,
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      fontWeight:
+                          isSelected ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            Widget buildRadiusButton(String label, int value) {
+              final isSelected = travelMinutes == value;
+              return InkWell(
+                onTap: () => setDialogState(() => travelMinutes = value),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: isSelected ? Colors.green.shade700 : Colors.grey[200],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isSelected ? Colors.white : Colors.black,
+                      fontWeight:
+                          isSelected ? FontWeight.bold : FontWeight.normal,
                     ),
                   ),
                 ),
@@ -473,15 +556,23 @@ class _HomeScreenState extends State<HomeScreen> {
             }
 
             return AlertDialog(
-              title: const Text('Current Fuel Level'),
+              title: const Text('Search Options'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '${(fuelLevel / 100).toStringAsFixed(2)} tank',
-                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  // Fuel level
+                  const Text('Current Fuel Level',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 8),
+                  Center(
+                    child: Text(
+                      '${(fuelLevel / 100).toStringAsFixed(2)} tank',
+                      style: const TextStyle(
+                          fontSize: 22, fontWeight: FontWeight.bold),
+                    ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 12),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
@@ -492,7 +583,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       buildFuelButton('3/4', 75),
                     ],
                   ),
-                  const SizedBox(height: 20),
                   Slider(
                     value: fuelLevel,
                     min: 0,
@@ -500,7 +590,26 @@ class _HomeScreenState extends State<HomeScreen> {
                     divisions: 20,
                     label: '${fuelLevel.toInt()}%',
                     activeColor: Colors.green,
-                    onChanged: (value) => setDialogState(() => fuelLevel = value),
+                    onChanged: (value) =>
+                        setDialogState(() => fuelLevel = value),
+                  ),
+
+                  const Divider(),
+
+                  // Search radius
+                  const Text('Search Radius',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      buildRadiusButton('5 min', 5),
+                      buildRadiusButton('10 min', 10),
+                      buildRadiusButton('15 min', 15),
+                      buildRadiusButton('20 min', 20),
+                      buildRadiusButton('No limit', -1),
+                    ],
                   ),
                 ],
               ),
@@ -510,9 +619,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: const Text('Cancel'),
                 ),
                 ElevatedButton(
-                  onPressed: () => Navigator.of(context).pop(fuelLevel),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700),
-                  child: const Text('Find Fuel', style: TextStyle(color: Colors.white)),
+                  onPressed: () {
+                    setState(() => _selectedTravelMinutes = travelMinutes);
+                    Navigator.of(context).pop({
+                      'fuelLevel': fuelLevel,
+                      'travelMinutes': travelMinutes,
+                    });
+                  },
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green.shade700),
+                  child: const Text('Find Fuel',
+                      style: TextStyle(color: Colors.white)),
                 ),
               ],
             );
@@ -662,7 +779,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final lat = result.station.latitude;
     final lng = result.station.longitude;
     final googleMapsUrl = Uri.parse('google.navigation:q=$lat,$lng');
-    final webMapsUrl = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+    final webMapsUrl =
+        Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
 
     try {
       if (await canLaunchUrl(googleMapsUrl)) {
@@ -680,7 +798,6 @@ class _HomeScreenState extends State<HomeScreen> {
       final prefs = await SharedPreferences.getInstance();
       final existingJson = prefs.getStringList('fillUpHistory') ?? [];
 
-      // Calculate savings vs nearest station
       final savings = _nearestStation != null
           ? _nearestStation!.totalCost - result.totalCost
           : 0.0;
@@ -694,7 +811,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
       existingJson.add(jsonEncode(record));
       await prefs.setStringList('fillUpHistory', existingJson);
-
       debugPrint('💾 Saved fill-up record: ${result.station.name}');
     } catch (e) {
       debugPrint('⚠️ Could not save fill-up record: $e');
@@ -918,8 +1034,43 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Row(
         children: [
-          Icon(Icons.local_gas_station, color: Colors.green.shade700, size: 20),
-          const SizedBox(width: 8),
+          // ── Back button ──
+          InkWell(
+            onTap: () {
+              setState(() {
+                _allResults = [];
+                _nearestStation = null;
+                _savingsVsNearest = 0.0;
+                _markers = {};
+                _showMapView = false;
+                _searchQuery = '';
+                _searchController.clear();
+                _hasCustomOrigin = false;
+                _customSearchOrigin = null;
+              });
+            },
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.green.shade700,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.arrow_back, color: Colors.white, size: 16),
+                  SizedBox(width: 4),
+                  Text('Back',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -934,21 +1085,19 @@ class _HomeScreenState extends State<HomeScreen> {
                     'Save \$${_savingsVsNearest.toStringAsFixed(2)} vs nearest',
                     style: TextStyle(fontSize: 12, color: Colors.green.shade700),
                   ),
+                if (_hasCustomOrigin)
+                  Text(
+                    'Searching from custom location',
+                    style: TextStyle(fontSize: 11, color: Colors.orange.shade700),
+                  ),
               ],
             ),
           ),
+          // New search button
           TextButton.icon(
-            onPressed: () {
-              setState(() {
-                _allResults = [];
-                _nearestStation = null;
-                _savingsVsNearest = 0.0;
-                _markers = {};
-                _showMapView = false;
-              });
-            },
+            onPressed: _isLoading ? null : _findCheapestFuelWithAd,
             icon: const Icon(Icons.search, size: 16),
-            label: const Text('New Search'),
+            label: const Text('Search Again'),
             style: TextButton.styleFrom(foregroundColor: Colors.green.shade800),
           ),
         ],
@@ -956,7 +1105,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ── Map preview on home (before search) — shows user location ──
+  // ── Map preview on home (before search) — shows user location or custom origin ──
   Widget _buildHomeMapPreview() {
     if (_currentPosition == null) {
       return Center(
@@ -975,27 +1124,129 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final userPos = LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
+    final displayPos = _hasCustomOrigin ? _customSearchOrigin! : userPos;
 
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.zero),
-      child: GoogleMap(
-        initialCameraPosition: CameraPosition(target: userPos, zoom: 14),
-        myLocationEnabled: true,
-        myLocationButtonEnabled: true,
-        zoomControlsEnabled: true,
-        mapType: MapType.normal,
-        onMapCreated: (controller) {
-          _mapController = controller;
-        },
-        markers: {
-          Marker(
-            markerId: const MarkerId('user_location'),
-            position: userPos,
-            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
-            infoWindow: const InfoWindow(title: 'Your Location'),
-          ),
-        },
+    // Build markers for home preview
+    final previewMarkers = <Marker>{
+      Marker(
+        markerId: const MarkerId('user_location'),
+        position: userPos,
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+        infoWindow: const InfoWindow(title: 'Your Location'),
       ),
+      if (_hasCustomOrigin)
+        Marker(
+          markerId: const MarkerId('custom_origin'),
+          position: _customSearchOrigin!,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          infoWindow: const InfoWindow(
+              title: 'Search from here', snippet: 'Tap "Find Cheapest Fuel" to search'),
+        ),
+    };
+
+    return Stack(
+      children: [
+        ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.zero),
+          child: GoogleMap(
+            initialCameraPosition:
+                CameraPosition(target: displayPos, zoom: 14),
+            myLocationEnabled: true,
+            myLocationButtonEnabled: true,
+            zoomControlsEnabled: true,
+            mapType: MapType.normal,
+            markers: previewMarkers,
+            onMapCreated: (controller) {
+              _mapController = controller;
+            },
+            onTap: (LatLng tappedPoint) {
+              // Tapping the map sets a custom search origin
+              setState(() {
+                _customSearchOrigin = tappedPoint;
+                _hasCustomOrigin = true;
+              });
+              _mapController?.animateCamera(
+                  CameraUpdate.newLatLng(tappedPoint));
+            },
+          ),
+        ),
+
+        // Custom origin banner
+        if (_hasCustomOrigin)
+          Positioned(
+            top: 12,
+            left: 16,
+            right: 16,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade700,
+                borderRadius: BorderRadius.circular(10),
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2)),
+                ],
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.location_on, color: Colors.white, size: 18),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Searching from custom location',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _hasCustomOrigin = false;
+                        _customSearchOrigin = null;
+                      });
+                      _mapController?.animateCamera(
+                          CameraUpdate.newLatLng(userPos));
+                    },
+                    child: const Text(
+                      'Use My Location',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          decoration: TextDecoration.underline),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+        // Hint overlay (only shown when no custom origin set)
+        if (!_hasCustomOrigin)
+          Positioned(
+            bottom: 16,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Text(
+                  'Tap the map to search from a different location',
+                  style: TextStyle(color: Colors.white, fontSize: 12),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -1037,6 +1288,42 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
 
+        // ── Search/filter bar (list view only) ──
+        if (!_showMapView)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (value) =>
+                  setState(() => _searchQuery = value.toLowerCase()),
+              decoration: InputDecoration(
+                hintText: 'Filter by station name or brand…',
+                hintStyle: TextStyle(fontSize: 13, color: Colors.grey[500]),
+                prefixIcon:
+                    Icon(Icons.search, color: Colors.green.shade700, size: 20),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 18),
+                        onPressed: () {
+                          setState(() {
+                            _searchQuery = '';
+                            _searchController.clear();
+                          });
+                        },
+                      )
+                    : null,
+                contentPadding:
+                    const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+                filled: true,
+                fillColor: Colors.grey.shade100,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+
         // Content
         Expanded(
           child: _showMapView ? _buildMapResults() : _buildListResults(),
@@ -1047,15 +1334,49 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ── List of all results — tap to see details popup ──
   Widget _buildListResults() {
+    // Apply search filter if active
+    final filteredResults = _searchQuery.isEmpty
+        ? _allResults
+        : _allResults.where((r) {
+            final name = r.station.name.toLowerCase();
+            final brand = (r.station.brand ?? '').toLowerCase();
+            return name.contains(_searchQuery) || brand.contains(_searchQuery);
+          }).toList();
+
+    if (filteredResults.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.search_off, size: 48, color: Colors.grey.shade400),
+            const SizedBox(height: 12),
+            Text(
+              'No stations match "$_searchQuery"',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 15),
+            ),
+            TextButton(
+              onPressed: () => setState(() {
+                _searchQuery = '';
+                _searchController.clear();
+              }),
+              child: const Text('Clear filter'),
+            ),
+          ],
+        ),
+      );
+    }
+
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      itemCount: _allResults.length,
+      itemCount: filteredResults.length,
       itemBuilder: (context, index) {
-        final result = _allResults[index];
+        final result = filteredResults[index];
+        // Use original index for rank display
+        final originalIndex = _allResults.indexOf(result);
         final isNearest = _nearestStation != null &&
             result.station.name == _nearestStation!.station.name &&
             result.station.address == _nearestStation!.station.address;
-        final isBestValue = index == 0;
+        final isBestValue = originalIndex == 0;
 
         return Card(
           margin: const EdgeInsets.only(bottom: 10),
@@ -1068,7 +1389,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           child: InkWell(
             borderRadius: BorderRadius.circular(14),
-            onTap: () => _showStationDetails(context, result, index),
+            onTap: () => _showStationDetails(context, result, originalIndex),
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Row(
@@ -1078,14 +1399,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     width: 40,
                     height: 40,
                     decoration: BoxDecoration(
-                      color: isBestValue ? Colors.green.shade700 : Colors.grey.shade200,
+                      color: isBestValue
+                          ? Colors.green.shade700
+                          : Colors.grey.shade200,
                       shape: BoxShape.circle,
                     ),
                     alignment: Alignment.center,
                     child: isBestValue
                         ? const Icon(Icons.star, color: Colors.white, size: 20)
                         : Text(
-                            '#${index + 1}',
+                            '#${originalIndex + 1}',
                             style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: Colors.grey.shade700,
@@ -1129,7 +1452,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         Text(
                           '${result.distance.toStringAsFixed(1)} km · '
                           '\$${result.station.price.toStringAsFixed(2)}/L',
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                          style:
+                              TextStyle(fontSize: 12, color: Colors.grey[600]),
                         ),
                       ],
                     ),
@@ -1146,7 +1470,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             color: Colors.green.shade800),
                       ),
                       Text('total',
-                          style: TextStyle(fontSize: 10, color: Colors.grey[500])),
+                          style: TextStyle(
+                              fontSize: 10, color: Colors.grey[500])),
                     ],
                   ),
                 ],
@@ -1164,11 +1489,18 @@ class _HomeScreenState extends State<HomeScreen> {
       return const Center(child: CircularProgressIndicator());
     }
 
+    final searchLat = _hasCustomOrigin
+        ? _customSearchOrigin!.latitude
+        : _currentPosition!.latitude;
+    final searchLng = _hasCustomOrigin
+        ? _customSearchOrigin!.longitude
+        : _currentPosition!.longitude;
+
     return Stack(
       children: [
         GoogleMap(
           initialCameraPosition: CameraPosition(
-            target: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+            target: LatLng(searchLat, searchLng),
             zoom: 13,
           ),
           markers: _markers,
@@ -1176,7 +1508,6 @@ class _HomeScreenState extends State<HomeScreen> {
           myLocationButtonEnabled: true,
           onMapCreated: (controller) {
             _mapController = controller;
-            _updateMapCamera();
           },
         ),
         // Map legend overlay

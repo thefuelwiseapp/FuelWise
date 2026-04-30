@@ -47,8 +47,8 @@ class Station {
       latitude: (json['latitude'] as num?)?.toDouble() ?? 0.0,
       longitude: (json['longitude'] as num?)?.toDouble() ?? 0.0,
       brand: json['brand'] as String?,
-      lastUpdated: json['lastUpdated'] != null 
-          ? DateTime.tryParse(json['lastUpdated'].toString()) 
+      lastUpdated: json['lastUpdated'] != null
+          ? DateTime.tryParse(json['lastUpdated'].toString())
           : null,
     );
   }
