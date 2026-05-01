@@ -28,7 +28,5 @@ workflows:
       - /tmp/xcodebuild_logs/*.log
     publishing:
       app_store_connect:
-        api_key: Codemagic
-        key_id: 75LVY8A8X4
-        issuer_id: dfc8ec1e-598c-496e-9bc7-8a5a1497d272
+        auth: integration
         submit_to_testflight: false
