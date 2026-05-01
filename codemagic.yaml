@@ -13,7 +13,7 @@ workflows:
       - name: Get Flutter packages
         script: flutter pub get
       - name: Build iOS IPA
-        script: flutter build ipa --release
+        script: flutter build ipa --release --export-options-plist=ios/exportOptions.plist
     artifacts:
       - build/ios/ipa/*.ipa
     publishing:
