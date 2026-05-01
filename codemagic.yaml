@@ -28,5 +28,5 @@ workflows:
       - /tmp/xcodebuild_logs/*.log
     publishing:
       app_store_connect:
-        auth: integration
+        apple_id: mark.watson90@icloud.com
         submit_to_testflight: false
