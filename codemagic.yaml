@@ -12,10 +12,18 @@ workflows:
     scripts:
       - name: Get Flutter packages
         script: flutter pub get
+      - name: Set up code signing settings on Xcode project
+        script: xcode-project use-profiles
       - name: Build iOS IPA
-        script: flutter build ipa --release --export-options-plist=ios/exportOptions.plist
+        script: flutter build ipa --release --no-codesign
+      - name: Package IPA
+        script: |
+          xcode-project build-ipa \
+            --workspace ios/Runner.xcworkspace \
+            --scheme Runner
     artifacts:
       - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
     publishing:
       app_store_connect:
         api_key: 75LVY8A8X4
