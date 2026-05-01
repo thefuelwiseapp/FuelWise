@@ -28,5 +28,5 @@ workflows:
       - /tmp/xcodebuild_logs/*.log
     publishing:
       app_store_connect:
-        apple_id: mark.watson90@icloud.com
+        api_key: 75LVY8A8X4
         submit_to_testflight: false
