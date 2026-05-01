@@ -51,6 +51,8 @@
 	<string>FuelWise needs your location to find nearby fuel stations</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>FuelWise needs your location to find nearby fuel stations</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>FuelWise needs your location to find nearby fuel stations</string>
 
 	<!-- App Tracking Transparency (iOS 14+) -->
 	<key>NSUserTrackingUsageDescription</key>
@@ -59,6 +61,10 @@
 	<!-- Google AdMob App ID -->
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-9562773239981411~6510563487</string>
+
+	<!-- Encryption compliance -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 
 	<!-- SKAdNetwork identifiers for AdMob -->
 	<key>SKAdNetworkItems</key>
@@ -114,7 +120,5 @@
 		<dict><key>SKAdNetworkIdentifier</key><string>mtkv5xtk9e.skadnetwork</string></dict>
 		<dict><key>SKAdNetworkIdentifier</key><string>9rd848q2bz.skadnetwork</string></dict>
 	</array>
-<key>ITSAppUsesNonExemptEncryption</key>
-<false/>
 </dict>
 </plist>
