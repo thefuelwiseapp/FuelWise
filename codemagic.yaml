@@ -3,6 +3,8 @@ workflows:
     name: FuelWise iOS Release
     max_build_duration: 60
     environment:
+      groups:
+        - app_store
       ios_signing:
         distribution_type: app_store
         bundle_identifier: au.com.markwatson.fuelwise
@@ -26,7 +28,7 @@ workflows:
       - /tmp/xcodebuild_logs/*.log
     publishing:
       app_store_connect:
-        api_key: 75LVY8A8X4
+        api_key: Codemagic
         key_id: 75LVY8A8X4
         issuer_id: dfc8ec1e-598c-496e-9bc7-8a5a1497d272
         submit_to_testflight: false
