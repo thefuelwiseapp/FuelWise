@@ -7,6 +7,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
+import 'package:app_tracking_transparency/app_tracking_transparency.dart';
 
 import 'fuel_service.dart';
 import 'models.dart';
@@ -88,15 +89,18 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _initializeAndNavigate() async {
-    try {
-      await SubscriptionService().initialize();
-      await AdService().initialize();
+  try {
+    // Request App Tracking Transparency permission (iOS 14+)
+    await AppTrackingTransparency.requestTrackingAuthorization();
+    
+    await SubscriptionService().initialize();
+    await AdService().initialize();
 
-      // Show app open ad on cold launch (free users only)
-      await AdService().showAppOpenAd();
-    } catch (e) {
-      debugPrint('Service initialization error: $e');
-    }
+    // Show app open ad on cold launch (free users only)
+    await AdService().showAppOpenAd();
+  } catch (e) {
+    debugPrint('Service initialization error: $e');
+  }
     
     await Future.delayed(const Duration(milliseconds: 1500));
     
