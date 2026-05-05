@@ -2,7 +2,7 @@ name: fuelwise
 description: "FuelWise - Find the cheapest fuel and save money"
 publish_to: 'none'
 
-version: 1.0.0+8
+version: 1.0.0+9
 
 environment:
   sdk: ^3.9.2
