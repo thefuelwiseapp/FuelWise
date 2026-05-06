@@ -16,17 +16,17 @@ class AdService extends ChangeNotifier {
   static const String _bannerAdUnitIdAndroid =
       'ca-app-pub-9562773239981411/8021291631';
   static const String _bannerAdUnitIdIOS =
-      'ca-app-pub-3940256099942544/2934735716'; // TODO: Add iOS banner ID
+      'ca-app-pub-9562773239981411/8401484792'; 
 
   static const String _interstitialAdUnitIdAndroid =
       'ca-app-pub-9562773239981411/2786038560';
   static const String _interstitialAdUnitIdIOS =
-      'ca-app-pub-3940256099942544/4411468910'; // TODO: Add iOS interstitial ID
+      'ca-app-pub-9562773239981411/6473844971';
 
   static const String _appOpenAdUnitIdAndroid =
       'ca-app-pub-9562773239981411/8042234677';
   static const String _appOpenAdUnitIdIOS =
-      'ca-app-pub-3940256099942544/5662855259'; // TODO: Add iOS app open ID
+      'ca-app-pub-9562773239981411/3847681635'; 
 
   final SubscriptionService _subscriptionService = SubscriptionService();
 
