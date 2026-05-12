@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/subscription_service.dart';
 import 'subscription_screen.dart';
+import '../models.dart';
 
 /// Settings screen for app configuration
 class SettingsScreen extends StatefulWidget {
@@ -20,12 +22,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   double _tankSize = 60.0;
   double _fuelEfficiency = 10.0;
 
+  List<String> _selectedCardIds = [];
+
   // Preferences
   bool _notificationsEnabled = true;
   String _distanceUnit = 'km';
   String _volumeUnit = 'L';
 
   bool _isLoading = true;
+  String _appVersion = '';
 
   final List<Map<String, String>> _fuelTypes = [
     {'code': 'E10', 'name': 'E10'},
@@ -45,6 +50,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
+    // Load app version from pubspec
+    final packageInfo = await PackageInfo.fromPlatform();
+
     if (mounted) {
       setState(() {
         // Use same keys as onboarding and HomeScreen
@@ -52,9 +60,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _secondaryFuelType = prefs.getString('secondaryFuelType') ?? '';
         _tankSize = prefs.getDouble('tankSize') ?? 60.0;
         _fuelEfficiency = prefs.getDouble('fuelEfficiency') ?? 10.0;
+        _selectedCardIds = prefs.getStringList('loyaltyCardIds') ?? [];
         _notificationsEnabled = prefs.getBool('notifications_enabled') ?? true;
         _distanceUnit = prefs.getString('distance_unit') ?? 'km';
         _volumeUnit = prefs.getString('volume_unit') ?? 'L';
+        _appVersion = packageInfo.version;
         _isLoading = false;
       });
     }
@@ -67,6 +77,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await prefs.setString('secondaryFuelType', _secondaryFuelType);
     await prefs.setDouble('tankSize', _tankSize);
     await prefs.setDouble('fuelEfficiency', _fuelEfficiency);
+    await prefs.setStringList('loyaltyCardIds', _selectedCardIds);
     await prefs.setBool('notifications_enabled', _notificationsEnabled);
     await prefs.setString('distance_unit', _distanceUnit);
     await prefs.setString('volume_unit', _volumeUnit);
@@ -150,6 +161,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             min: 20,
             max: 300,
             unit: 'L',
+            displayValue: '${_tankSize.toStringAsFixed(0)} L',
+            divisions: 56,
+            onDecrement: () => setState(() { if (_tankSize > 20) _tankSize -= 5; }),
+            onIncrement: () => setState(() { if (_tankSize < 300) _tankSize += 5; }),
             onChanged: (v) => setState(() => _tankSize = v),
           ),
           _buildSliderSetting(
@@ -158,8 +173,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             min: 3,
             max: 20,
             unit: 'L/100km',
+            displayValue: '${_fuelEfficiency.toStringAsFixed(1)} L/100km',
+            divisions: 34,
+            onDecrement: () => setState(() { if (_fuelEfficiency > 3) _fuelEfficiency -= 0.5; }),
+            onIncrement: () => setState(() { if (_fuelEfficiency < 20) _fuelEfficiency += 0.5; }),
             onChanged: (v) => setState(() => _fuelEfficiency = v),
           ),
+
+          const Divider(height: 32),
+
+          // ── Loyalty Card ──
+          _buildSectionHeader('Loyalty Card'),
+          _buildLoyaltyCardSelector(),
 
           const Divider(height: 32),
 
@@ -194,7 +219,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('App Version'),
-            subtitle: const Text('1.0.0'),
+            subtitle: Text(_appVersion.isNotEmpty ? _appVersion : '—'),
           ),
           ListTile(
             leading: const Icon(Icons.privacy_tip_outlined),
@@ -344,6 +369,95 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _buildLoyaltyCardSelector() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Select all cards you carry — discounts apply automatically at eligible stations.',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+          ),
+          const SizedBox(height: 8),
+          ...LoyaltyCard.all.map((card) {
+            final isSelected = _selectedCardIds.contains(card.id);
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.green.shade50 : Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: isSelected ? Colors.green.shade300 : Colors.grey.shade300,
+                ),
+              ),
+              child: CheckboxListTile(
+                value: isSelected,
+                onChanged: (checked) {
+                  setState(() {
+                    if (checked == true) {
+                      _selectedCardIds.add(card.id);
+                    } else {
+                      _selectedCardIds.remove(card.id);
+                    }
+                  });
+                },
+                title: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: card.badgeColor,
+                        borderRadius: BorderRadius.circular(5),
+                      ),
+                      child: Text(
+                        card.badgeLabel,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: card.id == 'nrma'
+                              ? Colors.black
+                              : Colors.white,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        card.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                subtitle: Text(
+                  card.description,
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+                activeColor: Colors.green.shade700,
+                controlAffinity: ListTileControlAffinity.trailing,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            );
+          }),
+          if (_selectedCardIds.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                '${_selectedCardIds.length} card${_selectedCardIds.length == 1 ? '' : 's'} selected — best discount applied per station',
+                style: TextStyle(fontSize: 11, color: Colors.green.shade700, fontStyle: FontStyle.italic),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -408,34 +522,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required double max,
     required String unit,
     required ValueChanged<double> onChanged,
+    required VoidCallback onDecrement,
+    required VoidCallback onIncrement,
+    int? divisions,
+    String? displayValue,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(title, style: const TextStyle(fontSize: 16)),
-              Text(
-                '${value.toStringAsFixed(1)} $unit',
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey[300]!),
+          borderRadius: BorderRadius.circular(8),
+          color: Colors.grey[50],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title,
                 style: TextStyle(
-                  color: Colors.green.shade700,
-                  fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[700])),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  displayValue ?? '${value.toStringAsFixed(1)} $unit',
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-              ),
-            ],
-          ),
-          Slider(
-            value: value,
-            min: min,
-            max: max,
-            divisions: ((max - min) * 2).toInt(),
-            activeColor: Colors.green.shade700,
-            onChanged: onChanged,
-          ),
-        ],
+                Row(
+                  children: [
+                    IconButton(
+                      onPressed: onDecrement,
+                      icon: const Icon(Icons.remove_circle_outline),
+                      color: Colors.green.shade700,
+                    ),
+                    IconButton(
+                      onPressed: onIncrement,
+                      icon: const Icon(Icons.add_circle_outline),
+                      color: Colors.green.shade700,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            Slider(
+              value: value,
+              min: min,
+              max: max,
+              divisions: divisions ?? ((max - min) * 2).toInt(),
+              activeColor: Colors.green.shade700,
+              onChanged: onChanged,
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -8,6 +8,8 @@ class FuelService {
   static const String _nswApiKey = 'mse3ShutX5dIpH8yLhGCR3mUACstrNjk';
   static const String _nswApiSecret = 'OuqYgDfFSPCwQ1FB';
   static const String _nswBaseUrl = 'https://api.onegov.nsw.gov.au';
+  // v2 endpoint covers NSW + TAS combined
+  static const String _nswV2BaseUrl = 'https://api.onegov.nsw.gov.au';
   static const String _nswTokenUrl = 'https://api.onegov.nsw.gov.au/oauth/client_credential/accesstoken';
 
   // NSW OAuth token cache — token is valid ~12 hours, cache it to avoid
@@ -38,14 +40,28 @@ class FuelService {
   }
 
   String _determineState(double latitude, double longitude) {
+    // ACT: roughly -35.9 to -35.1 lat, 148.7 to 149.4 lon — uses NSW FuelCheck API
+    if (latitude >= -35.9 && latitude <= -35.1 &&
+        longitude >= 148.7 && longitude <= 149.4) {
+      return 'NSW';
+    }
+
+    // TAS: roughly -43.7 to -40.5 lat, 144.5 to 148.5 lon — uses NSW FuelCheck v2 API
+    if (latitude >= -43.7 && latitude <= -40.5 &&
+        longitude >= 144.5 && longitude <= 148.5) {
+      return 'TAS';
+    }
+
     // QLD is roughly between -10 and -29 latitude
     if (latitude > -29 && latitude < -10) {
       return 'QLD';
     }
+
     // NSW is roughly between -28 and -37 latitude
-    else if (latitude >= -37 && latitude <= -28) {
+    if (latitude >= -37 && latitude <= -28) {
       return 'NSW';
     }
+
     return 'NSW';
   }
 
@@ -61,13 +77,14 @@ class FuelService {
       print('📍 Detected state: $state');
       List<Station> stations = [];
 
-      if (state == 'NSW') {
-        print('🌐 Fetching from NSW FuelCheck API...');
+      if (state == 'NSW' || state == 'TAS' || state == 'ACT') {
+        print('🌐 Fetching from NSW FuelCheck API (state: $state)...');
         stations = await _fetchFromNSWApi(
           fuelType: fuelType,
           latitude: latitude,
           longitude: longitude,
           radius: radius,
+          state: state,
         );
       } else if (state == 'QLD') {
         print('🌐 Fetching from QLD Fuel Prices API...');
@@ -144,6 +161,7 @@ class FuelService {
     required double latitude,
     required double longitude,
     int radius = 25,
+    String state = 'NSW',
   }) async {
     // Step 1 — get Bearer token
     final token = await _getNSWAccessToken();
@@ -152,7 +170,11 @@ class FuelService {
     final timestamp = DateTime.now().toUtc().toIso8601String().replaceFirst(RegExp(r'\.\d+Z$'), 'Z');
 
     // Step 3 — POST to the nearby endpoint with JSON body
-    final url = Uri.parse('$_nswBaseUrl/FuelPriceCheck/v1/fuel/prices/nearby');
+    // TAS requires v2 endpoint; NSW works on v1
+    final endpoint = state == 'TAS'
+        ? '$_nswV2BaseUrl/FuelPriceCheck/v2/fuel/prices/nearby'
+        : '$_nswBaseUrl/FuelPriceCheck/v1/fuel/prices/nearby';
+    final url = Uri.parse(endpoint);
 
     final requestBody = jsonEncode({
       'fueltype': fuelType,

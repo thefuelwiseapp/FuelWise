@@ -16,6 +16,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   String? _secondaryFuelType;
   double _tankSize = 60.0;
   double _fuelEfficiency = 10.0;
+  List<String> _selectedCardIds = [];
   
   final List<FuelType> _fuelTypes = [
     FuelType(code: 'E10', name: 'E10'),
@@ -40,6 +41,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _secondaryFuelType = prefs.getString('secondaryFuelType');
       _tankSize = prefs.getDouble('tankSize') ?? 60.0;
       _fuelEfficiency = prefs.getDouble('fuelEfficiency') ?? 10.0;
+      _selectedCardIds = prefs.getStringList('loyaltyCardIds') ?? [];
     });
   }
 
@@ -57,6 +59,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       await prefs.setString('secondaryFuelType', _secondaryFuelType ?? '');
       await prefs.setDouble('tankSize', _tankSize);
       await prefs.setDouble('fuelEfficiency', _fuelEfficiency);
+      await prefs.setStringList('loyaltyCardIds', _selectedCardIds);
       await prefs.setBool('onboardingComplete', true);
 
       print('💾 Saved settings: $_primaryFuelType, ${_tankSize}L, ${_fuelEfficiency}L/100km');
@@ -371,6 +374,89 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   ),
                 ),
                 
+                const SizedBox(height: 20),
+
+                // ── Loyalty Cards ──
+                Text(
+                  'Loyalty / Discount Cards',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[700],
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Select all cards you carry — best discount applied automatically',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                ),
+                const SizedBox(height: 8),
+                ...LoyaltyCard.all.map((card) {
+                  final isSelected = _selectedCardIds.contains(card.id);
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    decoration: BoxDecoration(
+                      color: isSelected ? Colors.green.shade50 : Colors.grey.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isSelected ? Colors.green.shade300 : Colors.grey.shade300,
+                      ),
+                    ),
+                    child: CheckboxListTile(
+                      value: isSelected,
+                      onChanged: (checked) {
+                        setState(() {
+                          if (checked == true) {
+                            _selectedCardIds.add(card.id);
+                          } else {
+                            _selectedCardIds.remove(card.id);
+                          }
+                        });
+                      },
+                      title: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: card.badgeColor,
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                            child: Text(
+                              card.badgeLabel,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: card.id == 'nrma'
+                                    ? Colors.black
+                                    : Colors.white,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              card.name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      subtitle: Text(
+                        card.description,
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                      activeColor: Colors.green.shade700,
+                      controlAffinity: ListTileControlAffinity.trailing,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  );
+                }),
+
                 const SizedBox(height: 40),
                 
                 // Save Button

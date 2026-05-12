@@ -2,7 +2,7 @@ name: fuelwise
 description: "FuelWise - Find the cheapest fuel and save money"
 publish_to: 'none'
 
-version: 1.0.1+11
+version: 1.0.2+12
 
 environment:
   sdk: ^3.9.2
@@ -16,40 +16,28 @@ dependencies:
   shared_preferences: ^2.2.2
   google_maps_flutter: ^2.5.0
   url_launcher: ^6.2.2
-  app_tracking_transparency: ^2.0.6 
-  
   
   # Monetization
   google_mobile_ads: ^5.2.0
-  purchases_flutter: ^8.2.3
+  purchases_flutter: ^8.2.3  # UPDATED to latest
   
   # Premium features
-  firebase_core: ^3.8.1
-  cloud_firestore: ^5.6.1
-  flutter_local_notifications: ^18.0.1
-  fl_chart: ^0.69.0
+  firebase_core: ^3.8.1  # UPDATED to latest
+  cloud_firestore: ^5.6.1  # UPDATED to latest
+  flutter_local_notifications: ^18.0.1  # UPDATED to latest
+  fl_chart: ^0.69.0  # UPDATED to latest
   
   # State management
   provider: ^6.1.2
   
   # Utilities
   intl: ^0.19.0
+  package_info_plus: ^8.0.0  # Read version from pubspec at runtime
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
-  flutter_launcher_icons: ^0.14.1
-
-flutter_launcher_icons:
-  android: true
-  ios: false
-  image_path: "assets/icon/icon.png"
-  min_sdk_android: 21
-  adaptive_icon_background: "#1B5E20"
-  adaptive_icon_foreground: "assets/icon/icon.png"
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/icon/

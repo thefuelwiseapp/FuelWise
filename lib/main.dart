@@ -7,7 +7,6 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
-import 'package:app_tracking_transparency/app_tracking_transparency.dart';
 
 import 'fuel_service.dart';
 import 'models.dart';
@@ -89,27 +88,45 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _initializeAndNavigate() async {
-  try {
-    // Request App Tracking Transparency permission (iOS 14+)
-    await AppTrackingTransparency.requestTrackingAuthorization();
-    
-    await SubscriptionService().initialize();
-    await AdService().initialize();
+    // Always navigate after this — services are best-effort only
+    try {
+      // ATT (App Tracking Transparency) is handled natively on iOS —
+      // no Dart-side call needed here. Android has no equivalent requirement.
 
-    // Show app open ad on cold launch (free users only)
-    await AdService().showAppOpenAd();
-  } catch (e) {
-    debugPrint('Service initialization error: $e');
-  }
-    
-    await Future.delayed(const Duration(milliseconds: 1500));
-    
+      // Initialize services with individual timeouts so a failure
+      // in one doesn't block navigation
+      await SubscriptionService()
+          .initialize()
+          .timeout(const Duration(seconds: 8), onTimeout: () {
+        debugPrint('⚠️ SubscriptionService init timed out');
+      });
+
+      await AdService()
+          .initialize()
+          .timeout(const Duration(seconds: 5), onTimeout: () {
+        debugPrint('⚠️ AdService init timed out');
+      });
+
+      // Show app open ad on cold launch (free users only)
+      await AdService()
+          .showAppOpenAd()
+          .timeout(const Duration(seconds: 3), onTimeout: () {
+        debugPrint('⚠️ App open ad timed out');
+        return false;
+      });
+    } catch (e) {
+      debugPrint('Service initialization error: $e');
+    }
+
+    // Always wait minimum splash duration then navigate
+    await Future.delayed(const Duration(milliseconds: 1200));
+
     if (!mounted) return;
 
     final prefs = await SharedPreferences.getInstance();
     final onboardingComplete = prefs.getBool('onboardingComplete') ?? false;
     final welcomeShown = prefs.getBool('welcomeShown') ?? false;
-    
+
     if (mounted) {
       if (onboardingComplete) {
         Navigator.of(context).pushReplacementNamed('/home');
@@ -193,6 +210,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _secondaryFuelType = '';
   double _tankSize = 60.0;
   double _fuelEfficiency = 10.0;
+  List<LoyaltyCard> _selectedLoyaltyCards = []; // user's selected loyalty cards
   
   Position? _currentPosition;
   bool _isLoading = false;
@@ -259,6 +277,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _secondaryFuelType = prefs.getString('secondaryFuelType') ?? '';
         _tankSize = prefs.getDouble('tankSize') ?? 60.0;
         _fuelEfficiency = prefs.getDouble('fuelEfficiency') ?? 10.0;
+        final savedCardIds = prefs.getStringList('loyaltyCardIds') ?? [];
+        _selectedLoyaltyCards = LoyaltyCard.fromIds(savedCardIds);
       });
     }
   }
@@ -405,9 +425,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           station.longitude,
         );
 
+        // Find best applicable loyalty card for this station
+        // Pass stationName as fallback for APIs (e.g. QLD) that return numeric brand IDs
+        LoyaltyCard? bestCard;
+        double bestDiscount = 0.0;
+        for (final card in _selectedLoyaltyCards) {
+          if (card.appliesTo(station.brand, stationName: station.name) &&
+              card.discountPerLitre > bestDiscount) {
+            bestDiscount = card.discountPerLitre;
+            bestCard = card;
+          }
+        }
+        final effectivePrice = (station.price - bestDiscount).clamp(0.0, double.infinity);
+
         final fuelUsedForTrip = (distanceKm * _fuelEfficiency) / 100;
-        final drivingCost = fuelUsedForTrip * station.price;
-        final fillUpCost = fuelNeeded * station.price;
+        final drivingCost = fuelUsedForTrip * effectivePrice;
+        final fillUpCost = fuelNeeded * effectivePrice;
         final totalCost = fillUpCost + drivingCost;
 
         results.add(StationResult(
@@ -416,6 +449,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           fillUpCost: fillUpCost,
           drivingCost: drivingCost,
           totalCost: totalCost,
+          discountedPrice: effectivePrice > 0 ? effectivePrice : station.price,
+          loyaltyDiscount: bestDiscount,
+          applicableCard: bestCard,
         ));
       }
 
@@ -718,6 +754,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               child: Column(
                 children: [
                   _detailRow(Icons.speed, 'Distance', '${result.distance.toStringAsFixed(1)} km away'),
+                  if (result.loyaltyDiscount > 0 && result.applicableCard != null) ...[
+                    const Divider(),
+                    _detailRow(
+                      Icons.card_membership,
+                      result.applicableCard!.name,
+                      '-${(result.loyaltyDiscount * 100).toStringAsFixed(0)}c/L',
+                      badgeColor: result.applicableCard!.badgeColor,
+                      badgeLabel: result.applicableCard!.badgeLabel,
+                      badgeTextDark: result.applicableCard!.id == 'nrma',
+                    ),
+                  ],
                   const Divider(),
                   _detailRow(Icons.local_gas_station, 'Fill-up cost', '\$${result.fillUpCost.toStringAsFixed(2)}'),
                   const Divider(),
@@ -754,15 +801,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _detailRow(IconData icon, String label, String value, {bool highlight = false}) {
+  Widget _detailRow(
+    IconData icon,
+    String label,
+    String value, {
+    bool highlight = false,
+    Color? badgeColor,
+    String? badgeLabel,
+    bool badgeTextDark = false,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
           Icon(icon, color: Colors.green.shade700, size: 20),
-          const SizedBox(width: 12),
-          Text(label, style: TextStyle(color: Colors.grey.shade600, fontSize: 14)),
-          const Spacer(),
+          const SizedBox(width: 8),
+          if (badgeColor != null && badgeLabel != null)
+            Container(
+              margin: const EdgeInsets.only(right: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              decoration: BoxDecoration(
+                color: badgeColor,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                badgeLabel,
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  color: badgeTextDark ? Colors.black : Colors.white,
+                ),
+              ),
+            ),
+          Expanded(
+            child: Text(label,
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 14)),
+          ),
           Text(
             value,
             style: TextStyle(
@@ -921,16 +995,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       body: SafeArea(
         child: Column(
           children: [
-            // Banner Ad (free users only)
-            if (adService.shouldShowAds && adService.isBannerAdLoaded)
-              Container(
-                alignment: Alignment.center,
-                width: double.infinity,
-                height: 50,
-                color: Colors.grey.shade100,
-                child: adService.getBannerAdWidget(),
-              ),
-
             // ── RESULTS STATE: compact header ──
             if (_hasResults)
               _buildResultsHeader(),
@@ -990,6 +1054,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ? _buildResultsContent() // List or Map toggle
                   : _buildHomeMapPreview(), // Map preview with location
             ),
+
+            // ── Banner Ad at BOTTOM (free users only) ──
+            if (adService.shouldShowAds && adService.isBannerAdLoaded)
+              Container(
+                alignment: Alignment.center,
+                width: double.infinity,
+                height: 50,
+                color: Colors.grey.shade100,
+                child: adService.getBannerAdWidget(),
+              ),
           ],
         ),
       ),
@@ -1093,6 +1167,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   Text(
                     'Searching from custom location',
                     style: TextStyle(fontSize: 11, color: Colors.orange.shade700),
+                  ),
+                if (_selectedLoyaltyCards.isNotEmpty)
+                  Text(
+                    '${_selectedLoyaltyCards.length} loyalty card${_selectedLoyaltyCards.length == 1 ? '' : 's'} applied',
+                    style: TextStyle(fontSize: 11, color: Colors.green.shade600, fontStyle: FontStyle.italic),
                   ),
               ],
             ),
@@ -1398,26 +1477,61 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               padding: const EdgeInsets.all(14),
               child: Row(
                 children: [
-                  // Rank badge
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: isBestValue
-                          ? Colors.green.shade700
-                          : Colors.grey.shade200,
-                      shape: BoxShape.circle,
-                    ),
-                    alignment: Alignment.center,
-                    child: isBestValue
-                        ? const Icon(Icons.star, color: Colors.white, size: 20)
-                        : Text(
-                            '#${originalIndex + 1}',
-                            style: TextStyle(
+                  // Rank badge with loyalty card emoji overlay
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: isBestValue
+                              ? Colors.green.shade700
+                              : Colors.grey.shade200,
+                          shape: BoxShape.circle,
+                        ),
+                        alignment: Alignment.center,
+                        child: isBestValue
+                            ? const Icon(Icons.star, color: Colors.white, size: 20)
+                            : Text(
+                                '#${originalIndex + 1}',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey.shade700,
+                                    fontSize: 12),
+                              ),
+                      ),
+                      if (result.applicableCard != null)
+                        Positioned(
+                          bottom: -4,
+                          right: -4,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 3, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: result.applicableCard!.badgeColor,
+                              borderRadius: BorderRadius.circular(4),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.2),
+                                  blurRadius: 3,
+                                  offset: const Offset(0, 1),
+                                ),
+                              ],
+                            ),
+                            child: Text(
+                              result.applicableCard!.badgeLabel,
+                              style: TextStyle(
+                                fontSize: 7,
                                 fontWeight: FontWeight.bold,
-                                color: Colors.grey.shade700,
-                                fontSize: 12),
+                                color: result.applicableCard!.id == 'nrma'
+                                    ? Colors.black
+                                    : Colors.white,
+                              ),
+                            ),
                           ),
+                        ),
+                    ],
                   ),
                   const SizedBox(width: 12),
                   // Station info
@@ -1455,9 +1569,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                         Text(
                           '${result.distance.toStringAsFixed(1)} km · '
-                          '\$${result.station.price.toStringAsFixed(2)}/L',
-                          style:
-                              TextStyle(fontSize: 12, color: Colors.grey[600]),
+                          '\$${result.discountedPrice > 0 ? result.discountedPrice.toStringAsFixed(2) : result.station.price.toStringAsFixed(2)}/L'
+                          '${result.applicableCard != null ? ' (disc.)' : ''}',
+                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                         ),
                       ],
                     ),
