@@ -8,14 +8,16 @@ class FuelService {
   static const String _nswApiKey = 'mse3ShutX5dIpH8yLhGCR3mUACstrNjk';
   static const String _nswApiSecret = 'OuqYgDfFSPCwQ1FB';
   static const String _nswBaseUrl = 'https://api.onegov.nsw.gov.au';
-  // v2 endpoint covers NSW + TAS combined
-  static const String _nswV2BaseUrl = 'https://api.onegov.nsw.gov.au';
   static const String _nswTokenUrl = 'https://api.onegov.nsw.gov.au/oauth/client_credential/accesstoken';
 
   // NSW OAuth token cache — token is valid ~12 hours, cache it to avoid
   // fetching a new one on every search request
   String? _nswAccessToken;
   DateTime? _nswTokenExpiry;
+
+  // VIC Servo Saver Open Data API Configuration
+  static const String _vicApiBaseUrl = 'https://api.fuel.service.vic.gov.au/open-data/v1';
+  static const String _vicConsumerId = 'c3a9e5ea31d5ab6660a577984665d6fc';
 
   // QLD Fuel Prices API Configuration (Official)
   static const String _qldApiBaseUrl = 'https://fppdirectapi-prod.fuelpricesqld.com.au';
@@ -43,13 +45,19 @@ class FuelService {
     // ACT: roughly -35.9 to -35.1 lat, 148.7 to 149.4 lon — uses NSW FuelCheck API
     if (latitude >= -35.9 && latitude <= -35.1 &&
         longitude >= 148.7 && longitude <= 149.4) {
-      return 'NSW';
+      return 'ACT';
     }
 
     // TAS: roughly -43.7 to -40.5 lat, 144.5 to 148.5 lon — uses NSW FuelCheck v2 API
     if (latitude >= -43.7 && latitude <= -40.5 &&
         longitude >= 144.5 && longitude <= 148.5) {
       return 'TAS';
+    }
+
+    // VIC: roughly -39.2 to -33.9 lat, 140.9 to 149.9 lon
+    if (latitude >= -39.2 && latitude <= -33.9 &&
+        longitude >= 140.9 && longitude <= 149.9) {
+      return 'VIC';
     }
 
     // QLD is roughly between -10 and -29 latitude
@@ -85,6 +93,14 @@ class FuelService {
           longitude: longitude,
           radius: radius,
           state: state,
+        );
+      } else if (state == 'VIC') {
+        print('🌐 Fetching from VIC Servo Saver API...');
+        stations = await _fetchFromVICApi(
+          fuelType: fuelType,
+          latitude: latitude,
+          longitude: longitude,
+          radius: radius,
         );
       } else if (state == 'QLD') {
         print('🌐 Fetching from QLD Fuel Prices API...');
@@ -170,9 +186,9 @@ class FuelService {
     final timestamp = DateTime.now().toUtc().toIso8601String().replaceFirst(RegExp(r'\.\d+Z$'), 'Z');
 
     // Step 3 — POST to the nearby endpoint with JSON body
-    // TAS requires v2 endpoint; NSW works on v1
+    // TAS requires v2 endpoint; NSW and ACT use v1
     final endpoint = state == 'TAS'
-        ? '$_nswV2BaseUrl/FuelPriceCheck/v2/fuel/prices/nearby'
+        ? '$_nswBaseUrl/FuelPriceCheck/v2/fuel/prices/nearby'
         : '$_nswBaseUrl/FuelPriceCheck/v1/fuel/prices/nearby';
     final url = Uri.parse(endpoint);
 
@@ -385,6 +401,164 @@ class FuelService {
   // ─────────────────────────────────────────────
   // QLD API — unchanged
   // ─────────────────────────────────────────────
+
+  // ─────────────────────────────────────────────
+  // VIC SERVO SAVER API
+  // ─────────────────────────────────────────────
+
+  Future<List<Station>> _fetchFromVICApi({
+    required String fuelType,
+    required double latitude,
+    required double longitude,
+    int radius = 25,
+  }) async {
+    // VIC API returns all stations statewide in one call.
+    // We fetch all, filter by distance, then find matching fuel type.
+    final url = Uri.parse('$_vicApiBaseUrl/fuel/prices');
+
+    // Generate a unique transaction ID for this request (required by VIC API)
+    final transactionId = _generateUUID();
+
+    print('📡 VIC API: $url');
+
+    final response = await http.get(
+      url,
+      headers: {
+        'x-consumer-id': _vicConsumerId,
+        'x-transactionid': transactionId,
+        'User-Agent': 'FuelWise/1.0',
+        'Accept': 'application/json',
+      },
+    ).timeout(_apiTimeout);
+
+    print('📡 VIC API Status: ${response.statusCode}');
+
+    if (response.statusCode != 200) {
+      throw Exception('VIC API failed: ${response.statusCode}');
+    }
+
+    return _parseVICResponse(
+      response.body,
+      fuelType: fuelType,
+      userLat: latitude,
+      userLng: longitude,
+      radius: radius,
+    );
+  }
+
+  List<Station> _parseVICResponse(
+    String responseBody, {
+    required String fuelType,
+    required double userLat,
+    required double userLng,
+    required int radius,
+  }) {
+    try {
+      final data = jsonDecode(responseBody);
+      final List<dynamic> details = data['fuelPriceDetails'] ?? [];
+
+      if (details.isEmpty) {
+        print('⚠️ No VIC stations in response');
+        return [];
+      }
+
+      print('📊 VIC API returned ${details.length} station records');
+
+      // Map FuelWise fuel type codes to VIC API fuel type codes
+      final vicFuelType = _mapToVICFuelType(fuelType);
+      print('🔍 Looking for VIC fuel type: $vicFuelType (from FuelWise: $fuelType)');
+
+      List<Station> stations = [];
+
+      for (var item in details) {
+        try {
+          final station = item['fuelStation'];
+          if (station == null) continue;
+
+          final lat = (station['location']?['latitude'] as num?)?.toDouble();
+          final lng = (station['location']?['longitude'] as num?)?.toDouble();
+
+          if (lat == null || lng == null) continue;
+
+          // Filter by distance
+          final distance = _calculateDistance(userLat, userLng, lat, lng);
+          if (distance > radius) continue;
+
+          // Find the matching fuel type in this station's price list
+          final List<dynamic> fuelPrices = item['fuelPrices'] ?? [];
+          final matchingFuel = fuelPrices.firstWhere(
+            (fp) =>
+                fp['fuelType'] == vicFuelType &&
+                fp['isAvailable'] == true &&
+                fp['price'] != null,
+            orElse: () => null,
+          );
+
+          if (matchingFuel == null) continue;
+
+          final priceRaw = (matchingFuel['price'] as num).toDouble();
+
+          // VIC prices are in cents per litre (e.g. 188.8 = $1.888/L)
+          final price = priceRaw / 100.0;
+
+          if (price <= 0 || price > 10) {
+            print('  ⚠️ Invalid VIC price: $priceRaw');
+            continue;
+          }
+
+          final name = station['name'] ?? 'Unknown Station';
+          final address = station['address'] ?? 'Address not available';
+          final brandId = station['brandId']?.toString();
+
+          stations.add(Station(
+            siteId: station['id']?.toString() ?? '',
+            name: name,
+            address: address,
+            price: price,
+            latitude: lat,
+            longitude: lng,
+            brand: brandId, // brandId — will also match on name via appliesTo()
+          ));
+
+          print('  ✓ $name: ${distance.toStringAsFixed(1)}km - \$${price.toStringAsFixed(3)}/L');
+        } catch (e) {
+          print('⚠️ Error parsing VIC station: $e');
+          continue;
+        }
+      }
+
+      stations.sort((a, b) => a.price.compareTo(b.price));
+      print('✅ Returning ${stations.length} VIC stations');
+      return stations;
+    } catch (e) {
+      print('❌ Error parsing VIC response: $e');
+      return [];
+    }
+  }
+
+  /// Map FuelWise internal fuel type codes to VIC API fuel type codes
+  String _mapToVICFuelType(String fuelType) {
+    const Map<String, String> mapping = {
+      'E10': 'E10',
+      'U91': 'U91',
+      'P95': 'P95',
+      'P98': 'P98',
+      'DL': 'DSL',    // FuelWise DL → VIC DSL
+      'PDL': 'PDSL',  // FuelWise PDL → VIC PDSL
+      'LPG': 'LPG',
+    };
+    return mapping[fuelType] ?? fuelType;
+  }
+
+  /// Generate a UUID v4 string for x-transactionid header
+  String _generateUUID() {
+    final random = Random();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant
+    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+  }
 
   Future<List<Station>> _fetchFromQLDApi({
     required String fuelType,

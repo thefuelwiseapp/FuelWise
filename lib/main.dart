@@ -210,7 +210,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _secondaryFuelType = '';
   double _tankSize = 60.0;
   double _fuelEfficiency = 10.0;
-  List<LoyaltyCard> _selectedLoyaltyCards = []; // user's selected loyalty cards
+  List<LoyaltyCard> _selectedLoyaltyCards = [];
+  bool _isVICLocation = false; // user's selected loyalty cards
   
   Position? _currentPosition;
   bool _isLoading = false;
@@ -523,6 +524,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _markers = newMarkers;
           _isLoading = false;
           _showMapView = false;
+          // Base VIC detection on search origin, not GPS position
+          // so custom map pin searches in VIC also show the delay notice
+          _isVICLocation = (searchLat >= -39.2 &&
+              searchLat <= -33.9 &&
+              searchLng >= 140.9 &&
+              searchLng <= 149.9);
         });
 
         if (_mapController != null) {
@@ -1172,6 +1179,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   Text(
                     '${_selectedLoyaltyCards.length} loyalty card${_selectedLoyaltyCards.length == 1 ? '' : 's'} applied',
                     style: TextStyle(fontSize: 11, color: Colors.green.shade600, fontStyle: FontStyle.italic),
+                  ),
+                if (_isVICLocation)
+                  Text(
+                    '⏱ VIC prices are approx. 24hrs delayed',
+                    style: TextStyle(fontSize: 11, color: Colors.orange.shade700, fontStyle: FontStyle.italic),
                   ),
               ],
             ),
